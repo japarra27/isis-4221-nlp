@@ -1,0 +1,122 @@
+# Databricks notebook source
+# MAGIC %md
+# MAGIC # NLP - HW2 - Parte2A: Entrenamiento Bool BOW
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Con el objetivo de aplicar los conocimientos presentados en clase y a su vez generar los modelos solicitados, en este punto se hará uso de la herramienta Databricks y Pyspark con el objetivo de leer los archivos, generar la construcción del dataset y hacer el entrenamiento respectivo de los modelos.
+# MAGIC 
+# MAGIC Para la elaboración de la actividad se sigue una serie de pasos:
+# MAGIC 
+# MAGIC * Se crea un cluster de spark 3.1 en Databricks, con mínimo 1 driver, 1 nodo y autoescalable a máximo 20.
+# MAGIC * Cada nodo es una instancia m4.large de AWS con 2 core y 8gb ram, el driver tiene la misma configuración.
+# MAGIC * Los archivos se almacenan en un bucket de s3, se descomprime y se hace la lectura para la construcción del dataset.
+# MAGIC * Se hace uso de spark para paralelizar los trabajos y hacerlos más eficiente a la hora de entrenar los modelos.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Punto No. 2: Naive Bayes (NB) & Logistic Regression (LR)
+# MAGIC 
+# MAGIC ### For the 20N dataset compare two classifiers NB and LR to identify the 20 different newsgroups.
+
+# COMMAND ----------
+
+# importar librerias
+
+import pyspark.sql.functions as F
+from pyspark.sql.types import *
+
+# Librerias para procesar datos
+from pyspark.ml import Pipeline
+from pyspark.ml.feature import CountVectorizer, StringIndexer,  HashingTF, IDF
+
+# librerias sparknlp
+import sparknlp
+from sparknlp.base import *
+from sparknlp.common import *
+from sparknlp.annotator import *
+
+# ml libraries
+from pyspark.ml.classification import NaiveBayes, LogisticRegression
+from pyspark.ml.evaluation import MulticlassClassificationEvaluator
+
+# COMMAND ----------
+
+# Importar dataset procesado para la ejecución de los modelos
+sdf = spark.read.format('parquet').load('/mnt/databricks-mine/HW02/news20processed')
+
+# COMMAND ----------
+
+# Creación del pipeline para hacer el modelo
+indexer = StringIndexer(inputCol="fileName", outputCol="labelIndex")
+bool_bow = CountVectorizer(inputCol="tokens", outputCol="features_bool", binary=True)
+
+# Definición del pipeline
+pipeline = Pipeline(stages=[indexer, bool_bow])
+
+# fit y transform del pipeline
+pipeData = pipeline.fit(sdf).transform(sdf)
+
+# COMMAND ----------
+
+pipeData.select("fileName","labelIndex").groupBy('fileName', 'labelIndex').count().orderBy('labelIndex').show(25)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ##### Divide the dataset into training (60%), development (10%) and test (30%)
+
+# COMMAND ----------
+
+model = pipeData.select('labelIndex', 'features_bool')
+(trainData, testData, devData) = model.randomSplit([0.6, 0.3, 0.1], seed=321)
+
+# COMMAND ----------
+
+# MAGIC %md 
+# MAGIC ##### Train NB and LR using the following representations:
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ###### Boolean BOW
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Train Bool BOW models
+
+# COMMAND ----------
+
+# NaiveBayes
+nbBool = NaiveBayes(modelType="multinomial",labelCol="labelIndex", featuresCol="features_bool")
+nbModelBool = nbBool.fit(trainData).transform(testData)
+
+# COMMAND ----------
+
+# LogisticRegression
+lrBool = LogisticRegression(labelCol="labelIndex", featuresCol="features_bool")
+lrModelBool = lrBool.fit(trainData).transform(testData)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Test Bool BOW models
+
+# COMMAND ----------
+
+nbModelBool.select("prediction", "labelIndex", "features_bool").show(5)
+
+# COMMAND ----------
+
+lrModelBool.select("prediction", "labelIndex", "features_bool").show(5)
+
+# COMMAND ----------
+
+# Rvaluación NaiveBayes
+evaluator = MulticlassClassificationEvaluator(labelCol="labelIndex", predictionCol="prediction", metricName="accuracy")
+nb_accuracy = evaluator.evaluate(nbModelBool)
+print("Accuracy of NaiveBayes is = %g"% (nb_accuracy))
+print("Test Error of NaiveBayes = %g " % (1.0 - nb_accuracy))
